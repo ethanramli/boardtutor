@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod recording;
+mod board_tools;
 mod terminal;
 
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -87,14 +88,151 @@ fn hydrate_board(root: &Path, serialized: &str) -> Result<String> {
     serde_json::to_string(&board).map_err(error)
 }
 
+// Board names become file names, so keep them to plain characters. This also
+// stops a name from reaching outside the whiteboards folder.
+fn valid_board_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 80
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+}
+
+// A board or folder is a path like "Physics/Cells/Board 2": each part must pass
+// the name rule, so a path cannot reach outside the whiteboards folder.
+fn valid_entry_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() <= 6 && parts.iter().all(|part| valid_board_name(part))
+}
+
+fn whiteboards_dir(app: &AppHandle) -> Result<PathBuf> {
+    Ok(tutor_dir(app)?.join("whiteboards"))
+}
+
+fn entry_file(app: &AppHandle, path: &str, folder: bool) -> Result<PathBuf> {
+    if !valid_entry_path(path) {
+        return Err("Names can use letters, numbers, spaces, - _ and . only.".into());
+    }
+    let base = whiteboards_dir(app)?;
+    // The extension is added by hand, because a dot inside a name is allowed.
+    Ok(if folder { base.join(path) } else { base.join(format!("{path}.excalidraw")) })
+}
+
+fn board_file(app: &AppHandle, name: &str) -> Result<PathBuf> {
+    entry_file(app, name, false)
+}
+
+#[derive(Serialize)]
+struct Entry {
+    path: String,
+    folder: bool,
+}
+
+fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<Entry>) -> Result<()> {
+    for entry in fs::read_dir(dir).map_err(error)? {
+        let entry = entry.map_err(error)?;
+        let kind = entry.file_type().map_err(error)?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if valid_board_name(file_name) && depth < 5 {
+                let name = format!("{prefix}{file_name}");
+                out.push(Entry { path: name.clone(), folder: true });
+                walk(&path, &format!("{name}/"), depth + 1, out)?;
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("excalidraw") {
+            if let Some(stem) = path.file_stem().and_then(|n| n.to_str()) {
+                if valid_board_name(stem) {
+                    out.push(Entry { path: format!("{prefix}{stem}"), folder: false });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
-fn load_board(app: AppHandle) -> Result<Option<String>> {
-    let root = data_dir(&app)?;
-    match fs::read_to_string(root.join("workspace.excalidraw")) {
-        Ok(board) => hydrate_board(&root, &board).map(Some),
+fn list_boards(app: AppHandle) -> Result<Vec<Entry>> {
+    let mut out = Vec::new();
+    match walk(&whiteboards_dir(&app)?, "", 0, &mut out) {
+        Ok(()) => {}
+        Err(_) if !whiteboards_dir(&app)?.exists() => {}
+        Err(e) => return Err(e),
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn create_folder(app: AppHandle, path: String) -> Result<()> {
+    let full = entry_file(&app, &path, true)?;
+    fs::create_dir(full).map_err(error)
+}
+
+// Returns the board's text (or nothing for a new board) and records which board
+// is open, so the terminal's tool can tell which file the student is looking at.
+#[tauri::command]
+fn open_board(app: AppHandle, name: String) -> Result<Option<String>> {
+    let path = board_file(&app, &name)?;
+    atomic(
+        &tutor_dir(&app)?.join("current-board.txt"),
+        format!("whiteboards/{name}.excalidraw\n").as_bytes(),
+    )?;
+    match fs::read_to_string(path) {
+        Ok(board) => hydrate_board(&data_dir(&app)?, &board).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(error(e)),
     }
+}
+
+#[tauri::command]
+fn rename_entry(app: AppHandle, old: String, new: String, folder: bool) -> Result<()> {
+    let from = entry_file(&app, &old, folder)?;
+    let to = entry_file(&app, &new, folder)?;
+    // A change of letter case only is the same file on macOS, so allow it.
+    if old.to_lowercase() != new.to_lowercase() && to.exists() {
+        return Err(format!("\"{new}\" already exists."));
+    }
+    match fs::rename(&from, &to) {
+        Ok(()) => {}
+        // A board that was never saved has no file yet; there is nothing to move.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !folder => {}
+        Err(e) => return Err(error(e)),
+    }
+    // Keep current-board.txt pointing at the open board.
+    let marker = tutor_dir(&app)?.join("current-board.txt");
+    if let Ok(text) = fs::read_to_string(&marker) {
+        let open = text.trim_end().strip_prefix("whiteboards/").map(str::to_owned);
+        if let Some(open) = open {
+            let (old_part, new_part) = if folder {
+                (format!("{old}/"), format!("{new}/"))
+            } else {
+                (format!("{old}.excalidraw"), format!("{new}.excalidraw"))
+            };
+            let moved = if folder {
+                open.strip_prefix(&old_part).map(|rest| format!("{new_part}{rest}"))
+            } else {
+                (open == old_part).then_some(new_part)
+            };
+            if let Some(moved) = moved {
+                atomic(&marker, format!("whiteboards/{moved}\n").as_bytes())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+// Moves a board or a whole folder to the system Trash, so it can be put back.
+#[tauri::command]
+fn delete_entry(app: AppHandle, path: String, folder: bool) -> Result<()> {
+    let full = entry_file(&app, &path, folder)?;
+    if full.exists() {
+        trash::delete(full).map_err(error)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -105,16 +243,8 @@ fn save_board_image(app: AppHandle, request: Request<'_>) -> Result<()> {
 
 #[tauri::command]
 fn save_board(app: AppHandle, request: Request<'_>) -> Result<()> {
-    atomic(
-        &data_dir(&app)?.join("workspace.excalidraw"),
-        binary(&request)?,
-    )
-}
-
-#[tauri::command]
-fn read_board_file(path: PathBuf) -> Result<String> {
-    require_excalidraw(&path)?;
-    fs::read_to_string(path).map_err(error)
+    let name = percent_decode(header(&request, "x-board-name")?)?;
+    atomic(&board_file(&app, &name)?, binary(&request)?)
 }
 
 #[tauri::command]
@@ -151,142 +281,90 @@ fn require_excalidraw(path: &Path) -> Result<()> {
     Err("Choose an absolute .excalidraw file path.".into())
 }
 
-#[tauri::command]
-fn prepare_ask(app: AppHandle, request: Request<'_>) -> Result<Value> {
-    let root = data_dir(&app)?;
-    let id = Uuid::new_v4().to_string();
-    let dir = root.join("tutor").join(&id);
-    let board: Value = serde_json::from_slice(binary(&request)?).map_err(error)?;
-    let scene = board
-        .get("scene")
-        .and_then(Value::as_str)
-        .ok_or("Missing board scene.")?;
-    atomic(&dir.join("board.excalidraw"), scene.as_bytes())?;
-    for (field, name) in [("image", "board.png"), ("focus", "circled.png")] {
-        if let Some(image) = board.get(field).and_then(Value::as_str) {
-            use base64::Engine;
-            let png = image
-                .strip_prefix("data:image/png;base64,")
-                .ok_or("Invalid board image.")?;
-            atomic(
-                &dir.join(name),
-                &base64::engine::general_purpose::STANDARD
-                    .decode(png)
-                    .map_err(error)?,
-            )?;
-        }
-    }
-    if let Some(recording) = board.get("recording").and_then(Value::as_str) {
-        let source = recording::recording_dir(&app, recording)?;
-        for file in ["recording.mp4", "transcript.txt"] {
-            fs::hard_link(source.join(file), dir.join(file))
-                .or_else(|_| fs::copy(source.join(file), dir.join(file)).map(|_| ()))
-                .map_err(error)?;
-        }
-        let frames = source.join("frames");
-        if frames.is_dir() {
-            fs::create_dir(dir.join("frames")).map_err(error)?;
-            for entry in fs::read_dir(frames).map_err(error)? {
-                let entry = entry.map_err(error)?;
-                let target = dir.join("frames").join(entry.file_name());
-                fs::hard_link(entry.path(), &target)
-                    .or_else(|_| fs::copy(entry.path(), &target).map(|_| ()))
-                    .map_err(error)?;
-            }
-        }
-    }
-    Ok(json!({"id": id, "path": dir}))
+const TUTOR_GUIDE: &str = "# Board Tutor
+
+You are tutoring the student who uses the Board Tutor whiteboard app. This folder is your workspace.
+
+- To see or mark the student's open board, use the board tools: `look_at_board` (add picture=true to read handwriting), `draw_on_board` and `erase_from_board`. Do not read or edit the .excalidraw files in `whiteboards/` directly; they are large and the app saves over them.
+- `memory/` holds notes about the student: how they like to be taught (tone, pacing) and subject habits (for example, what to graph in math or draw in physics). Read it before teaching. When the student tells you a preference, add or update a note. Keep one topic per file.
+- `skills/` holds teaching skills you can follow. Read the ones that fit the subject.
+
+Do not delete files in these folders unless the student asks.
+";
+
+// The folder the app sets up in Documents. The terminal opens here, so tools
+// like Claude Code ask about trusting it only once.
+pub(crate) fn tutor_dir(app: &AppHandle) -> Result<PathBuf> {
+    Ok(app.path().document_dir().map_err(error)?.join("boardtutor"))
 }
 
-#[tauri::command]
-fn board_annotation(app: AppHandle, id: String) -> Result<Option<String>> {
-    valid_id(&id)?;
-    let path = data_dir(&app)?
-        .join("tutor")
-        .join(id)
-        .join("annotation.excalidraw");
-    match fs::read_to_string(path) {
-        Ok(scene) => Ok(Some(scene)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(error(e)),
+fn ensure_tutor_dir(app: &AppHandle) -> Result<()> {
+    let root = tutor_dir(app)?;
+    for name in ["skills", "memory", "whiteboards"] {
+        fs::create_dir_all(root.join(name)).map_err(error)?;
     }
-}
-
-#[cfg(target_os = "linux")]
-fn is_local_board(scheme: &str, host: Option<&str>, port: Option<u16>, dev: bool) -> bool {
-    (scheme, host, port) == ("tauri", Some("localhost"), None)
-        || (dev && (scheme, host, port) == ("http", Some("127.0.0.1"), Some(1420)))
+    let guide = root.join("CLAUDE.md");
+    if !guide.exists() {
+        atomic(&guide, TUTOR_GUIDE.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn main() {
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "linux")]
-    let builder = builder.on_permission_request(|webview, kind| {
-        use tauri::webview::{PermissionKind, PermissionResponse};
-        match kind {
-            PermissionKind::Microphone
-                if webview.label() == "main"
-                    && webview.url().is_ok_and(|url| {
-                        is_local_board(
-                            url.scheme(),
-                            url.host_str(),
-                            url.port(),
-                            cfg!(debug_assertions),
-                        )
-                    }) =>
-            {
-                PermissionResponse::Allow
-            }
-            PermissionKind::Microphone
-            | PermissionKind::Camera
-            | PermissionKind::DisplayCapture => PermissionResponse::Deny,
-            _ => PermissionResponse::Default,
-        }
-    });
     builder
+        .setup(|app| {
+            // A failure here shows up as an error the first time the board saves.
+            let _ = ensure_tutor_dir(app.handle());
+            if let Err(cause) = board_tools::start(app.handle()) {
+                eprintln!("Board tools for Claude are off: {cause}");
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
-        .manage(recording::Captures::default())
         .manage(terminal::Session::default())
+        .manage(board_tools::Pending::default())
         .invoke_handler(tauri::generate_handler![
-            load_board,
+            list_boards,
+            open_board,
+            create_folder,
+            rename_entry,
+            delete_entry,
             save_board,
             save_board_image,
-            read_board_file,
             write_board_file,
-            prepare_ask,
-            board_annotation,
-            recording::check_tools,
-            recording::start_recording,
-            recording::append_recording,
-            recording::finish_recording,
-            recording::cancel_recording,
-            recording::transcribe,
-            recording::latest_recording,
+            board_tools::board_tool_result,
+            board_tools::encode_png,
             terminal::start_terminal,
             terminal::write_terminal,
             terminal::resize_terminal,
             terminal::stop_terminal
         ])
         .run(tauri::generate_context!())
-        .expect("Excali Tutor could not start");
+        .expect("Board Tutor could not start");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn microphone_is_limited_to_the_local_board_origin() {
-        assert!(is_local_board("tauri", Some("localhost"), None, false));
-        assert!(is_local_board("http", Some("127.0.0.1"), Some(1420), true));
-        assert!(!is_local_board(
-            "http",
-            Some("127.0.0.1"),
-            Some(1420),
-            false
-        ));
-        assert!(!is_local_board("https", Some("other.example"), None, true));
+    fn board_names_cannot_leave_the_whiteboards_folder() {
+        assert!(valid_board_name("Board 2"));
+        assert!(valid_board_name("physics - cells_v1.2"));
+        assert!(valid_board_name("数学"));
+        for bad in ["", ".hidden", "..", "../x", "a/b", "a\\b", "a:b"] {
+            assert!(!valid_board_name(bad), "{bad:?}");
+        }
+        assert!(!valid_board_name(&"x".repeat(81)));
+    }
+
+    #[test]
+    fn entry_paths_check_every_part() {
+        assert!(valid_entry_path("Physics/Cells/Board 2"));
+        for bad in ["a//b", "a/../b", "/a", "a/", "a/.hidden", "a/b/c/d/e/f/g"] {
+            assert!(!valid_entry_path(bad), "{bad:?}");
+        }
     }
 
     #[test]
