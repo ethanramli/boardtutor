@@ -40,26 +40,40 @@ pub fn recording_dir(app: &AppHandle, id: &str) -> Result<PathBuf> {
     Ok(data_dir(app)?.join("recordings").join(id))
 }
 
-fn executable(name: &str) -> PathBuf {
-    let candidates = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
-    for dir in candidates {
-        let candidate = dir.join(if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            name.to_owned()
-        });
-        if candidate.is_file() {
-            return candidate;
-        }
+fn executable(root: &Path, name: &str) -> PathBuf {
+    let filename = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let installed = root.join("tools").join(name).join(&filename);
+    if installed.is_file() {
+        return installed;
     }
-    name.into()
+    #[cfg(windows)]
+    let platform_dirs = std::env::var_os("LOCALAPPDATA")
+        .map(|base| {
+            PathBuf::from(base)
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links")
+        })
+        .into_iter();
+    #[cfg(not(windows))]
+    let platform_dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        .map(PathBuf::from)
+        .into_iter();
+    std::env::split_paths(&path)
+        .chain(platform_dirs)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(&filename))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from(filename))
 }
 
-fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<Output> {
-    let mut command = Command::new(executable(program));
+fn run(root: &Path, program: &str, args: &[&std::ffi::OsStr]) -> Result<Output> {
+    let mut command = Command::new(executable(root, program));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -97,8 +111,9 @@ fn model(app: &AppHandle) -> Result<PathBuf> {
 #[tauri::command]
 pub async fn check_tools(app: AppHandle) -> Result<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        run("ffmpeg", &["-version".as_ref()])?;
-        run("whisper-cli", &["--help".as_ref()])?;
+        let root = data_dir(&app)?;
+        run(&root, "ffmpeg", &["-version".as_ref()])?;
+        run(&root, "whisper-cli", &["--help".as_ref()])?;
         model(&app)?;
         Ok(())
     })
@@ -162,7 +177,9 @@ pub async fn finish_recording(
     tauri::async_runtime::spawn_blocking(move || {
         let dir = recording_dir(&app, &id)?;
         let video = dir.join("recording.mp4");
+        let root = data_dir(&app)?;
         run(
+            &root,
             "ffmpeg",
             &[
                 "-nostdin".as_ref(),
@@ -289,11 +306,13 @@ pub async fn transcribe(app: AppHandle, id: String) -> Result<Replay> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = recording_dir(&app, &id)?;
         let video = dir.join("recording.mp4");
+        let root = data_dir(&app)?;
         let model = model(&app)?;
         let work = tempfile::tempdir_in(&dir).map_err(error)?;
         let audio = work.path().join("speech.wav");
         let output = work.path().join("whisper");
         run(
+            &root,
             "ffmpeg",
             &[
                 "-nostdin".as_ref(),
@@ -312,6 +331,7 @@ pub async fn transcribe(app: AppHandle, id: String) -> Result<Replay> {
             ],
         )?;
         run(
+            &root,
             "whisper-cli",
             &[
                 "-m".as_ref(),
@@ -330,6 +350,7 @@ pub async fn transcribe(app: AppHandle, id: String) -> Result<Replay> {
         fs::create_dir_all(&frames).map_err(error)?;
         let pattern = frames.join("frame-%05d.jpg");
         if let Err(message) = run(
+            &root,
             "ffmpeg",
             &[
                 "-nostdin".as_ref(),
@@ -363,6 +384,19 @@ pub async fn transcribe(app: AppHandle, id: String) -> Result<Replay> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_installed_whisper_takes_precedence_over_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = if cfg!(windows) {
+            "whisper-cli.exe"
+        } else {
+            "whisper-cli"
+        };
+        let installed = dir.path().join("tools").join("whisper-cli").join(filename);
+        atomic(&installed, b"fixture").unwrap();
+        assert_eq!(executable(dir.path(), "whisper-cli"), installed);
+    }
 
     #[test]
     fn preserves_millisecond_offsets_in_both_formats() {

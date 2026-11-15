@@ -1,0 +1,14 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Excali Tutor",
+        "width": 1280,
+        "height": 850,
+        "minWidth": 750,
+        "minHeight": 520,
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}

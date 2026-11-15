@@ -6,6 +6,23 @@ export type TranscriptLine = { startMs: number; endMs: number; text: string };
 export type Replay = { id: string; videoPath: string; lines: TranscriptLine[] | null };
 export type ActiveRecording = { stop(): Promise<Replay> };
 
+function mediaRecorder(stream: MediaStream): { recorder: MediaRecorder; format: "mp4" | "webm" } {
+  const formats = [
+    ["video/mp4", "mp4"],
+    ["video/webm;codecs=vp8,opus", "webm"],
+    ["video/webm", "webm"],
+  ] as const;
+  for (const [mimeType, format] of formats) {
+    if (!MediaRecorder.isTypeSupported(mimeType)) continue;
+    try {
+      return { recorder: new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2_500_000 }), format };
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== "NotSupportedError") throw error;
+    }
+  }
+  throw new Error("No supported video recorder is available. On Linux, check the GStreamer packages in the setup guide.");
+}
+
 export async function recordBoard(
   board: HTMLDivElement,
   background: () => string,
@@ -43,10 +60,7 @@ export async function recordBoard(
     draw(performance.now());
     video = canvas.captureStream(24);
     const stream = new MediaStream([...video.getVideoTracks(), ...microphone.getAudioTracks()]);
-    const mimeType = ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"]
-      .find((type) => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, { ...(mimeType && { mimeType }), videoBitsPerSecond: 2_500_000 });
-    const format = recorder.mimeType.includes("mp4") ? "mp4" : "webm";
+    const { recorder, format } = mediaRecorder(stream);
     id = await invoke<string>("start_recording", { format });
     const recordingId = id;
     let writes = Promise.resolve();

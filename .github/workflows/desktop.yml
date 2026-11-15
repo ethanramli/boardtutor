@@ -1,0 +1,95 @@
+name: Desktop previews
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macOS Apple silicon
+            artifact: macOS-apple-silicon
+            bundle: app
+          - runner: macos-15-intel
+            platform: macOS Intel
+            artifact: macOS-intel
+            bundle: app
+          - runner: windows-2022
+            platform: Windows x64
+            artifact: Windows-x64
+            bundle: nsis
+          - runner: ubuntu-24.04
+            platform: Linux x64
+            artifact: Linux-x64-deb
+            bundle: deb
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Install Linux build and media dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            ffmpeg gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            gstreamer1.0-pulseaudio xvfb xauth
+          for plugin in x264enc voaacenc avdec_h264 avdec_aac pulsesrc; do
+            gst-inspect-1.0 "$plugin" >/dev/null
+          done
+      - run: npm ci
+      - run: npm test
+      - run: npm run tauri -- build --bundles ${{ matrix.bundle }} -- --locked
+      - run: cargo test --release --manifest-path src-tauri/Cargo.toml --locked
+      - name: Check Linux desktop startup
+        if: runner.os == 'Linux'
+        run: |
+          set +e
+          WEBKIT_DISABLE_DMABUF_RENDERER=1 xvfb-run -a timeout 10s src-tauri/target/release/excali-tutor
+          status=$?
+          set -e
+          test "$status" -eq 124
+      - name: Prepare macOS archive
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p preview
+          ditto "src-tauri/target/release/bundle/macos/Excali Tutor.app" "preview/Excali Tutor.app"
+          cp scripts/setup-mac.sh preview/
+          ditto -c -k --keepParent preview "Excali-Tutor-${{ matrix.artifact }}.zip"
+          mkdir -p downloads
+          mv "Excali-Tutor-${{ matrix.artifact }}.zip" downloads/
+      - name: Prepare Windows installer
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              "$PWD/scripts/setup-windows.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors) { throw ($errors | Out-String) }
+          New-Item -ItemType Directory downloads | Out-Null
+          $installer = Get-Item src-tauri/target/release/bundle/nsis/*-setup.exe
+          Copy-Item $installer.FullName downloads/
+          Copy-Item scripts/setup-windows.ps1 downloads/
+      - name: Prepare Debian package
+        if: runner.os == 'Linux'
+        run: |
+          mkdir downloads
+          dpkg-deb -I src-tauri/target/release/bundle/deb/*.deb
+          cp src-tauri/target/release/bundle/deb/*.deb scripts/setup-linux.sh downloads/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Excali-Tutor-${{ matrix.artifact }}
+          path: downloads/
+          if-no-files-found: error

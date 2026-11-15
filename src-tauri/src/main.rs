@@ -212,8 +212,38 @@ fn board_annotation(app: AppHandle, id: String) -> Result<Option<String>> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn is_local_board(scheme: &str, host: Option<&str>, port: Option<u16>, dev: bool) -> bool {
+    (scheme, host, port) == ("tauri", Some("localhost"), None)
+        || (dev && (scheme, host, port) == ("http", Some("127.0.0.1"), Some(1420)))
+}
+
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_permission_request(|webview, kind| {
+        use tauri::webview::{PermissionKind, PermissionResponse};
+        match kind {
+            PermissionKind::Microphone
+                if webview.label() == "main"
+                    && webview.url().is_ok_and(|url| {
+                        is_local_board(
+                            url.scheme(),
+                            url.host_str(),
+                            url.port(),
+                            cfg!(debug_assertions),
+                        )
+                    }) =>
+            {
+                PermissionResponse::Allow
+            }
+            PermissionKind::Microphone
+            | PermissionKind::Camera
+            | PermissionKind::DisplayCapture => PermissionResponse::Deny,
+            _ => PermissionResponse::Default,
+        }
+    });
+    builder
         .plugin(tauri_plugin_dialog::init())
         .manage(recording::Captures::default())
         .manage(terminal::Session::default())
@@ -244,6 +274,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn microphone_is_limited_to_the_local_board_origin() {
+        assert!(is_local_board("tauri", Some("localhost"), None, false));
+        assert!(is_local_board("http", Some("127.0.0.1"), Some(1420), true));
+        assert!(!is_local_board(
+            "http",
+            Some("127.0.0.1"),
+            Some(1420),
+            false
+        ));
+        assert!(!is_local_board("https", Some("other.example"), None, true));
+    }
 
     #[test]
     fn accepts_unicode_dialog_paths() {

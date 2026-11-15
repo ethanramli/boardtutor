@@ -65,6 +65,8 @@ pub fn start_terminal(
         .map_err(error)?;
     let mut cmd = if cfg!(windows) {
         let mut shell = CommandBuilder::new("cmd.exe");
+        // Keep npm .cmd shims and native .exe installs usable through PATH.
+        shell.env("NoDefaultCurrentDirectoryInExePath", "1");
         shell.args(["/d", "/s", "/c", command]);
         shell
     } else {
@@ -73,6 +75,15 @@ pub fn start_terminal(
         } else {
             "/bin/bash"
         });
+        if let Some(home) = std::env::var_os("HOME") {
+            let local_bin = std::path::PathBuf::from(home).join(".local/bin");
+            let inherited = std::env::var_os("PATH").unwrap_or_default();
+            if let Ok(path) = std::env::join_paths(
+                std::iter::once(local_bin).chain(std::env::split_paths(&inherited)),
+            ) {
+                shell.env("PATH", path);
+            }
+        }
         shell.args(["-ilc", &format!("exec {command}")]);
         shell
     };
