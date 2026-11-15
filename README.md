@@ -1,4 +1,4 @@
-# Excali Tutor
+# boardtutor
 
 Work through a math or physics problem with the real Excalidraw pen, eraser, undo, and redo. Circle a step for a quick question or record yourself explaining a solution. When you open **Ask**, Codex or Claude Code has the board and study materials ready while you write your own question.
 
