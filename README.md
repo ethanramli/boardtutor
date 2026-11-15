@@ -9,8 +9,8 @@ Open the latest successful [desktop preview build](https://github.com/ethanramli
 | System | Artifact | Install and set up offline transcription |
 | --- | --- | --- |
 | Mac with Apple silicon or Intel | `Excali-Tutor-macOS-apple-silicon` or `Excali-Tutor-macOS-intel` | Extract the inner zip. With [Homebrew](https://brew.sh) installed, run `bash setup-mac.sh` in that folder, then open **Excali Tutor.app**. Allow microphone access when recording. The preview is ad-hoc signed. You can build from source if macOS blocks the downloaded app. |
-| Windows 11 x64 | `Excali-Tutor-Windows-x64` | Run the installer. In PowerShell run `winget install --exact --id Gyan.FFmpeg`, then open a new PowerShell window in the extracted folder and run `.\setup-windows.ps1`. If Windows marks the script as downloaded, review the file and use `Unblock-File -LiteralPath .\setup-windows.ps1` before running it. |
-| Ubuntu 24.04 or Debian 13 x64 | `Excali-Tutor-Linux-x64-deb` | In a terminal in the extracted folder, run `sudo apt install ./excali-tutor_*.deb curl`, then `bash setup-linux.sh`. Open **Excali Tutor** from your app menu. |
+| Windows 11 x64 | `Excali-Tutor-Windows-x64` | Run the installer. In PowerShell run `winget install --exact --id Gyan.FFmpeg`, then open a new PowerShell window in the extracted folder. Review the script and run `Unblock-File -LiteralPath .\setup-windows.ps1`, then `powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\setup-windows.ps1`. |
+| Ubuntu 24.04 or Debian 13 x64 | `Excali-Tutor-Linux-x64-deb` | In a terminal in the extracted folder, run `sudo apt install ./*.deb curl`, then `bash setup-linux.sh`. Open **Excali Tutor** from your app menu. |
 
 Setup downloads an English model around 142 MiB. On Windows, if Whisper reports a missing runtime, install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) and rerun setup. If the microphone is blocked, check the system microphone setting and selected input. [Platform details and troubleshooting](docs/platforms.md)
 
