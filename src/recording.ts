@@ -18,8 +18,9 @@ export async function recordBoard(
   const microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
   const canvas = document.createElement("canvas");
   const width = Math.min(Math.round(board.clientWidth * (window.devicePixelRatio || 1)), 1920);
-  canvas.width = Math.max(2, width);
-  canvas.height = Math.max(2, Math.round(board.clientHeight / board.clientWidth * width));
+  const even = (pixels: number) => Math.max(2, 2 * Math.floor(pixels / 2));
+  canvas.width = even(width);
+  canvas.height = even(board.clientHeight / board.clientWidth * width);
   let video: MediaStream | undefined;
   let animation = 0;
   let id: string | undefined;
@@ -30,11 +31,16 @@ export async function recordBoard(
   };
   try {
     if (typeof canvas.captureStream !== "function") throw new Error("Canvas recording is unavailable in this webview.");
-    const draw = () => {
-      paintViewport(board, canvas, background(), pointer());
+    let lastFrame = -Infinity;
+    const draw = (now: number) => {
+      // Composite near the recording frame rate and leave the other frames to the editor.
+      if (now - lastFrame >= 1000 / 30) {
+        paintViewport(board, canvas, background(), pointer());
+        lastFrame = now;
+      }
       animation = requestAnimationFrame(draw);
     };
-    draw();
+    draw(performance.now());
     video = canvas.captureStream(24);
     const stream = new MediaStream([...video.getVideoTracks(), ...microphone.getAudioTracks()]);
     const mimeType = ["video/mp4", "video/webm;codecs=vp8,opus", "video/webm"]

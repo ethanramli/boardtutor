@@ -23,7 +23,7 @@ To create the macOS application bundle locally, run `npm run tauri -- build --bu
 
 ## Study workflows
 
-- **Write and save.** Open and export portable `.excalidraw` files. Drag or paste images onto the canvas. The working board and its images autosave to disk.
+- **Write and save.** Open and export portable `.excalidraw` files. Drag or paste images onto the canvas. The working board and its images autosave to disk. Photos are saved separately so an ink stroke does not rewrite every image.
 - **Ask about a step.** Click **Circle**, draw around a region, then hit **Ask**. The tutor receives a crop, a viewport image, and the editable Excalidraw scene. A temporary circle stays out of drawing history.
 - **Explain a solution.** Press **⌘⇧R** to start or stop recording the board and mic. The app encodes the video and transcribes in English on the computer. Click a transcript timestamp to jump in **Replay**.
 - **Ask about a recording.** Press **⌘⇧A** or **Ask about recording** in Replay. The tutor terminal opens in a study folder with the full `recording.mp4`, `transcript.txt`, and the board. Type your question, use **Insert** to put the draft in the terminal, then press Enter at the CLI prompt. For CLIs that take images, the folder also has preview frames and the prompt tells the CLI how to extract a frame at any requested time from the original video.
@@ -39,7 +39,7 @@ macOS is first. Windows is next, then Linux. The UI and Rust backend share a cod
 
 - [`src/`](src) has the board, capture canvas, replay and terminal UI. [`recording.ts`](src/recording.ts) starts and stops board-and-mic capture and streams video chunks to Rust.
 - [`src-tauri/`](src-tauri) has the Rust desktop backend and permission/configuration files. [`recording.rs`](src-tauri/src/recording.rs) normalizes the video and runs offline transcription. [`terminal.rs`](src-tauri/src/terminal.rs) connects Claude Code and Codex to a local pseudoterminal.
-- [`scripts/`](scripts) contains the one-time Mac setup. [`.github/workflows/macos.yml`](.github/workflows/macos.yml) builds both Mac installers as downloadable preview artifacts.
+- [`scripts/`](scripts) contains the one-time Mac setup. [`.github/workflows/macos.yml`](.github/workflows/macos.yml) builds both Mac app bundles as downloadable preview artifacts.
 
 Run `npm test` for UI utility tests and `cargo test --manifest-path src-tauri/Cargo.toml --locked` for native backend tests.
 

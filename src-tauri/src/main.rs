@@ -4,6 +4,7 @@ mod recording;
 mod terminal;
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
@@ -55,13 +56,51 @@ pub(crate) fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str
         .ok_or_else(|| format!("Missing {name} header."))
 }
 
+fn image_path(root: &Path, id: &str) -> PathBuf {
+    root.join("board-images")
+        .join(format!("{:x}.json", Sha256::digest(id.as_bytes())))
+}
+
+fn hydrate_board(root: &Path, serialized: &str) -> Result<String> {
+    let mut board: Value = serde_json::from_str(serialized).map_err(error)?;
+    let needed = board["elements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["type"] == "image")
+        .filter_map(|item| item["fileId"].as_str().map(str::to_owned))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut files = board["files"].as_object().cloned().unwrap_or_default();
+    for id in needed {
+        if files.contains_key(&id) {
+            continue;
+        }
+        match fs::read(image_path(root, &id)) {
+            Ok(bytes) => {
+                files.insert(id, serde_json::from_slice(&bytes).map_err(error)?);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(error(e)),
+        }
+    }
+    board["files"] = Value::Object(files);
+    serde_json::to_string(&board).map_err(error)
+}
+
 #[tauri::command]
 fn load_board(app: AppHandle) -> Result<Option<String>> {
-    match fs::read_to_string(data_dir(&app)?.join("workspace.excalidraw")) {
-        Ok(board) => Ok(Some(board)),
+    let root = data_dir(&app)?;
+    match fs::read_to_string(root.join("workspace.excalidraw")) {
+        Ok(board) => hydrate_board(&root, &board).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(error(e)),
     }
+}
+
+#[tauri::command]
+fn save_board_image(app: AppHandle, request: Request<'_>) -> Result<()> {
+    let id = percent_decode(header(&request, "x-image-id")?)?;
+    atomic(&image_path(&data_dir(&app)?, &id), binary(&request)?)
 }
 
 #[tauri::command]
@@ -181,6 +220,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_board,
             save_board,
+            save_board_image,
             read_board_file,
             write_board_file,
             prepare_ask,
@@ -212,6 +252,21 @@ mod tests {
             "/a b/数学.excalidraw"
         );
         assert!(percent_decode("/invalid%Z0").is_err());
+    }
+
+    #[test]
+    fn hydrates_separate_images_and_preserves_legacy_embedded_images() {
+        let dir = tempfile::tempdir().unwrap();
+        atomic(
+            &image_path(dir.path(), "file:one"),
+            br#"{"id":"file:one","dataURL":"data:disk"}"#,
+        )
+        .unwrap();
+        let scene = r#"{"type":"excalidraw","elements":[{"type":"image","fileId":"file:one"},{"type":"image","fileId":"legacy"}],"files":{"legacy":{"id":"legacy","dataURL":"data:inline"}}}"#;
+        let restored: Value =
+            serde_json::from_str(&hydrate_board(dir.path(), scene).unwrap()).unwrap();
+        assert_eq!(restored["files"]["file:one"]["dataURL"], "data:disk");
+        assert_eq!(restored["files"]["legacy"]["dataURL"], "data:inline");
     }
 
     #[test]

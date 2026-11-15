@@ -1,10 +1,9 @@
 import { restore, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
+import type { Point, Region } from "./study";
 
 export type BoardData = ExcalidrawInitialDataState;
 export type BoardAPI = ExcalidrawImperativeAPI;
-
-import type { Point, Region } from "./study";
 
 export function readScene(text: string) {
   const value = JSON.parse(text);
@@ -14,8 +13,8 @@ export function readScene(text: string) {
   return restore(value, null, null, { repairBindings: true, refreshDimensions: true });
 }
 
-export function serializeBoard(api: BoardAPI): string {
-  return serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local");
+export function serializeBoard(api: BoardAPI, embedImages = true): string {
+  return serializeAsJSON(api.getSceneElements(), api.getAppState(), embedImages ? api.getFiles() : {}, "local");
 }
 
 export function paintViewport(board: HTMLDivElement, canvas: HTMLCanvasElement, background: string, pointer?: Point | null) {

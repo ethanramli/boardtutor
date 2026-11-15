@@ -43,6 +43,7 @@ function App() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saves = useRef<Promise<void>>(Promise.resolve());
   const savedSignature = useRef("");
+  const savedImages = useRef(new Map<string, string>());
 
   useEffect(() => {
     void invoke<string | null>("load_board").then((text) => {
@@ -55,9 +56,21 @@ function App() {
   function flushBoard() {
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
-    if (!api.current) return saves.current;
-    const bytes = encode(serializeBoard(api.current));
-    const pending = saves.current.catch(() => {}).then(() => invoke<void>("save_board", bytes));
+    const current = api.current;
+    if (!current) return saves.current;
+    const files = current.getFiles();
+    const fileIds = new Set(current.getSceneElements().flatMap((element) =>
+      element.type === "image" && element.fileId && files[element.fileId] ? [element.fileId] : []));
+    const bytes = encode(serializeBoard(current, false));
+    const pending = saves.current.catch(() => {}).then(async () => {
+      for (const id of fileIds) {
+        const file = files[id];
+        if (savedImages.current.get(id) === file.dataURL) continue;
+        await invoke<void>("save_board_image", encode(JSON.stringify(file)), { headers: { "x-image-id": encodeURIComponent(id) } });
+        savedImages.current.set(id, file.dataURL);
+      }
+      await invoke<void>("save_board", bytes);
+    });
     saves.current = pending;
     return pending;
   }
@@ -219,6 +232,12 @@ function App() {
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
+      if (event.code === "Escape" && marking) {
+        setMarking(false);
+        setStroke([]);
+        marked.current = null;
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.repeat) return;
       const action = event.code === "KeyR" ? toggleRecording
         : event.code === "KeyA" ? () => ask(replay && !marked.current ? "recording" : "board")
