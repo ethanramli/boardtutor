@@ -281,15 +281,23 @@ fn require_excalidraw(path: &Path) -> Result<()> {
     Err("Choose an absolute .excalidraw file path.".into())
 }
 
+// The app's guide for Claude. It is rewritten on every launch so it matches the
+// app's current tools; CLAUDE.md imports it and stays the student's own file.
 const TUTOR_GUIDE: &str = "# Board Tutor
 
 You are tutoring the student who uses the Board Tutor whiteboard app. This folder is your workspace.
 
-- To see or mark the student's open board, use the board tools: `look_at_board` (add picture=true to read handwriting), `draw_on_board` and `erase_from_board`. Do not read or edit the .excalidraw files in `whiteboards/` directly; they are large and the app saves over them.
+- To see or mark the student's open board, call `look_at_board` first (add picture=true to read handwriting), then `draw_on_board` or `erase_from_board`. You do not need to list folders or run commands to find the board. Do not read or edit the .excalidraw files directly; they are large and the app saves over them.
+- `whiteboards/` holds the student's boards, one file per board, in folders the student makes.
 - `memory/` holds notes about the student: how they like to be taught (tone, pacing) and subject habits (for example, what to graph in math or draw in physics). Read it before teaching. When the student tells you a preference, add or update a note. Keep one topic per file.
 - `skills/` holds teaching skills you can follow. Read the ones that fit the subject.
 
 Do not delete files in these folders unless the student asks.
+";
+
+const CLAUDE_FILE: &str = "@.boardtutor/guide.md
+
+<!-- Board Tutor keeps the line above up to date. Add your own notes for Claude below it. -->
 ";
 
 // The folder the app sets up in Documents. The terminal opens here, so tools
@@ -299,13 +307,17 @@ pub(crate) fn tutor_dir(app: &AppHandle) -> Result<PathBuf> {
 }
 
 fn ensure_tutor_dir(app: &AppHandle) -> Result<()> {
-    let root = tutor_dir(app)?;
+    set_up_tutor_dir(&tutor_dir(app)?)
+}
+
+fn set_up_tutor_dir(root: &Path) -> Result<()> {
     for name in ["skills", "memory", "whiteboards"] {
         fs::create_dir_all(root.join(name)).map_err(error)?;
     }
-    let guide = root.join("CLAUDE.md");
-    if !guide.exists() {
-        atomic(&guide, TUTOR_GUIDE.as_bytes())?;
+    atomic(&root.join(".boardtutor").join("guide.md"), TUTOR_GUIDE.as_bytes())?;
+    let notes = root.join("CLAUDE.md");
+    if !notes.exists() {
+        atomic(&notes, CLAUDE_FILE.as_bytes())?;
     }
     Ok(())
 }
@@ -365,6 +377,24 @@ mod tests {
         for bad in ["a//b", "a/../b", "/a", "a/", "a/.hidden", "a/b/c/d/e/f/g"] {
             assert!(!valid_entry_path(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn first_launch_sets_up_the_folder_and_keeps_the_students_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("boardtutor");
+        set_up_tutor_dir(&root).unwrap();
+        for name in ["skills", "memory", "whiteboards"] {
+            assert!(root.join(name).is_dir(), "{name}");
+        }
+        assert!(fs::read_to_string(root.join("CLAUDE.md")).unwrap().starts_with("@.boardtutor/guide.md"));
+        assert!(fs::read_to_string(root.join(".boardtutor/guide.md")).unwrap().contains("look_at_board"));
+
+        fs::write(root.join("CLAUDE.md"), "my own notes").unwrap();
+        fs::write(root.join(".boardtutor/guide.md"), "old guide").unwrap();
+        set_up_tutor_dir(&root).unwrap();
+        assert_eq!(fs::read_to_string(root.join("CLAUDE.md")).unwrap(), "my own notes");
+        assert_eq!(fs::read_to_string(root.join(".boardtutor/guide.md")).unwrap(), TUTOR_GUIDE);
     }
 
     #[test]
