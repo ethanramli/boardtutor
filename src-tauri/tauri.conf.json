@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Excali Tutor",
+  "productName": "Board Tutor",
   "version": "0.1.0",
-  "identifier": "io.github.ethanramli.excalitutor",
+  "identifier": "io.github.ethanramli.boardtutor",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Excali Tutor",
+        "title": "Board Tutor",
         "width": 1280,
         "height": 850,
         "minWidth": 750,
@@ -20,13 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; frame-src 'none'",
-      "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "$APPDATA/recordings/*/recording.mp4"
-        ]
-      }
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data: blob:; media-src 'self' blob: asset: http://asset.localhost https://asset.localhost; worker-src 'self' blob:; object-src 'none'; frame-src 'none'"
     }
   },
   "bundle": {
@@ -38,8 +32,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": "-",
-      "entitlements": "Entitlements.plist"
+      "signingIdentity": "-"
     }
   }
 }

@@ -2,7 +2,7 @@
   "app": {
     "windows": [
       {
-        "title": "Excali Tutor",
+        "title": "Board Tutor",
         "width": 1280,
         "height": 850,
         "minWidth": 750,

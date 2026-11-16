@@ -1,4 +1,4 @@
-use crate::{data_dir, error, valid_id, Result};
+use crate::{error, tutor_dir, valid_id, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -43,23 +43,13 @@ fn size(rows: u16, cols: u16) -> PtySize {
 pub fn start_terminal(
     app: AppHandle,
     session: State<'_, Session>,
-    context_id: String,
     terminal_id: String,
-    tutor: String,
     rows: u16,
     cols: u16,
 ) -> Result<()> {
-    valid_id(&context_id)?;
     valid_id(&terminal_id)?;
-    let command = match tutor.as_str() {
-        "claude" => "claude",
-        "codex" => "codex",
-        _ => return Err("Unknown tutor.".into()),
-    };
-    let dir = data_dir(&app)?.join("tutor").join(context_id);
-    if !dir.is_dir() {
-        return Err("Tutor context does not exist.".into());
-    }
+    let dir = tutor_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(error)?;
     let pair = native_pty_system()
         .openpty(size(rows, cols))
         .map_err(error)?;
@@ -67,7 +57,6 @@ pub fn start_terminal(
         let mut shell = CommandBuilder::new("cmd.exe");
         // Keep npm .cmd shims and native .exe installs usable through PATH.
         shell.env("NoDefaultCurrentDirectoryInExePath", "1");
-        shell.args(["/d", "/s", "/c", command]);
         shell
     } else {
         let mut shell = CommandBuilder::new(if cfg!(target_os = "macos") {
@@ -84,11 +73,13 @@ pub fn start_terminal(
                 shell.env("PATH", path);
             }
         }
-        shell.args(["-ilc", &format!("exec {command}")]);
+        shell.arg("-il");
         shell
     };
     cmd.cwd(dir);
     cmd.env("TERM", "xterm-256color");
+    // Stop macOS from restoring Terminal.app sessions inside this shell.
+    cmd.env("SHELL_SESSIONS_DISABLE", "1");
     cmd.env_remove("CLAUDECODE");
     let mut reader = pair.master.try_clone_reader().map_err(error)?;
     let writer = pair.master.take_writer().map_err(error)?;

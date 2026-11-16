@@ -1,5 +1,5 @@
 [package]
-name = "excali-tutor"
+name = "board-tutor"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,13 +8,16 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+png = "0.18"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 tempfile = "3"
+trash = "5.3.0"
 uuid = { version = "1", features = ["v4"] }
 
 [profile.release]

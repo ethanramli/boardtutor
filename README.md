@@ -1,50 +1,61 @@
 # boardtutor
 
-Work through a math or physics problem with the real Excalidraw pen, eraser, undo, and redo. Circle a step for a quick question or record yourself explaining a solution. When you open **Ask**, Codex or Claude Code has the board and study materials ready while you write your own question.
+A plain Excalidraw whiteboard with Claude Code beside it. Work through a problem on the board, open the terminal, and ask Claude about it. Claude can look at your board and draw on it while you watch: a red **Claude** cursor writes text, sketches with the pencil, and adds arrows and shapes, right next to your own work.
 
-## Install the desktop preview
+## What it costs
 
-Open the latest successful [desktop preview build](https://github.com/ethanramli/excali-tutor/actions/workflows/desktop.yml). Scroll to **Artifacts**, download the file for your system, and extract it.
+Claude draws through three small tools (`look_at_board`, `draw_on_board`, `erase_from_board`) instead of reading and rewriting board files or taking screenshots. Only short commands like `text 120,80 "F = ma"` travel; the app draws them.
 
-| System | Artifact | Install and set up offline transcription |
-| --- | --- | --- |
-| Mac with Apple silicon or Intel | `Excali-Tutor-macOS-apple-silicon` or `Excali-Tutor-macOS-intel` | Extract the inner zip. With [Homebrew](https://brew.sh) installed, run `bash setup-mac.sh` in that folder, then open **Excali Tutor.app**. Allow microphone access when recording. The preview is ad-hoc signed. You can build from source if macOS blocks the downloaded app. |
-| Windows 11 x64 | `Excali-Tutor-Windows-x64` | Run the installer. In PowerShell run `winget install --exact --id Gyan.FFmpeg`, then open a new PowerShell window in the extracted folder. Review the script and run `Unblock-File -LiteralPath .\setup-windows.ps1`, then `powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\setup-windows.ps1`. |
-| Ubuntu 24.04 or Debian 13 x64 | `Excali-Tutor-Linux-x64-deb` | In a terminal in the extracted folder, run `sudo apt install ./*.deb curl`, then `bash setup-linux.sh`. Open **Excali Tutor** from your app menu. |
+| Request | Model | Result | Cost |
+| --- | --- | --- | --- |
+| "draw a rocket and label its parts" | Haiku 5.5 | Rocket with title, 6 labels and arrows, 19 s | **$0.0084** |
+| A rocket, before the board tools existed | not recorded | Nothing drawn; Claude spent the request searching for the board file | $0.30 |
 
-Setup downloads an English model around 142 MiB. On Windows, if Whisper reports a missing runtime, install the [Microsoft Visual C++ x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) and rerun setup. If the microphone is blocked, check the system microphone setting and selected input. [Platform details and troubleshooting](docs/platforms.md)
+Both numbers are from Claude Code's usage screen on 2026-11-15. They are single runs, and the second used a different setup and possibly a different model, so read them as one example rather than a benchmark. Choosing a cheaper model with `/model` lowers the cost further.
 
-For tutoring, install and sign in to [Codex](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/setup) from your regular terminal. Confirm that `codex --version` or `claude --version` works before opening **Ask**. On Windows use the native CLI in PowerShell or Command Prompt.
+## Install
 
-### Build from source
+1. **Download.** Open the latest run of [Desktop previews](.github/workflows/desktop.yml) under the repository's Actions tab, scroll to **Artifacts**, and download the file for your system. A maintainer starts that build with **Run workflow**.
+2. **macOS only: let the app open.** The preview is not signed with an Apple Developer ID, so macOS may say it is damaged or from an unidentified developer. Move **Board Tutor.app** to Applications, then run this once in Terminal:
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Board Tutor.app"
+   ```
+3. **Install Claude Code** and sign in, following [its setup guide](https://code.claude.com/docs/en/setup). Check that `claude --version` works in a normal terminal.
 
-Install Node.js 22 or newer and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system. Follow the relevant transcription setup above with the script in [`scripts/`](scripts). On Ubuntu or Debian, source builds also need the FFmpeg and GStreamer packages listed in the [Linux bundle configuration](src-tauri/tauri.linux.conf.json).
+Windows and Linux builds are produced by the same workflow but have not been tested by hand yet.
+
+## First run
+
+Everything else is set up by the app when it starts:
+
+- It creates `Documents/boardtutor` with `whiteboards/` (your boards and folders), `memory/` (notes about how you like to learn) and `skills/` (teaching skills).
+- It writes the connection for Claude's board tools (`.mcp.json`) and a settings file that pre-approves them (`.claude/settings.json`).
+- It keeps an up-to-date guide for Claude in `.boardtutor/guide.md`, which `CLAUDE.md` imports. Add your own notes for Claude below the first line of `CLAUDE.md`; the app never overwrites them.
+
+Open the terminal with the icon at the top right (⌘⇧T on Mac, Ctrl+Shift+T elsewhere) and type `claude`. The first time, Claude Code asks whether you trust the folder; choose yes. Then ask something like "draw a rocket and label its parts". Start `claude` after the app is open, since that is when it picks up the board tools.
+
+## Using the board
+
+- The menu at the top left lists your boards and folders. The two icons in its header make a new board or folder inside the folder you last clicked, or at the top if you clicked empty space. Hover a row and use **⋮** to rename it, delete it (it goes to the Trash), or add something inside a folder.
+- Boards save as you draw. Everything Claude draws is one undo step (⌘Z).
+- Drag the terminal's left edge to resize it.
+
+## Build from source
+
+Install Node.js 22 or newer and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your system.
 
 ```sh
 npm ci
 npm run tauri dev
 ```
 
-For a local package run `npm run tauri -- build --bundles app -- --locked` on macOS, replace `app` with `nsis` on Windows or with `deb` on Ubuntu or Debian. Packages are in `src-tauri/target/release/bundle/`.
-
-## Study workflows
-
-- **Write and save.** Open and export portable `.excalidraw` files. Drag or paste images onto the canvas. The working board and its images autosave to disk. Photos are saved separately so an ink stroke does not rewrite every image.
-- **Ask about a step.** Click **Circle**, draw around a region, then hit **Ask**. The tutor receives a crop, a viewport image, and the editable Excalidraw scene. A temporary circle stays out of drawing history.
-- **Explain a solution.** Press **⌘⇧R** on Mac or **Ctrl+Shift+R** on Windows and Linux to start or stop recording the board and mic. The app encodes the video and transcribes in English on the computer. Click a transcript timestamp to jump in **Replay**.
-- **Ask about a recording.** Press **⌘⇧A** on Mac, **Ctrl+Shift+A** on Windows and Linux, or **Ask about recording** in Replay. The tutor terminal opens in a study folder with the full `recording.mp4`, `transcript.txt`, and the board. Type your question, use **Insert** to put the draft in the terminal, then press Enter at the CLI prompt. For CLIs that take images, the folder also has preview frames and the prompt tells the CLI how to extract a frame at any requested time from the original video.
-- **Apply an edit.** Ask the tutor to save an annotation and click **Apply tutor edit**. This applies its proposed scene as an undoable edit. If you changed the board since the tutor received it, reopen Ask to refresh its context first.
-
-The recorder captures the drawing area and pointer, plus microphone audio. Boards and recordings stay in the desktop app’s local data directory. The tutor reads the selected study materials when you submit a question using its normal account and usage allowance. Transcription is free to run offline after setup.
+For a package run `npm run tauri -- build --bundles app -- --locked` on macOS; replace `app` with `nsis` on Windows or `deb` on Ubuntu or Debian. Packages are in `src-tauri/target/release/bundle/`. Tests: `npm test` for the board-path logic and `cargo test --manifest-path src-tauri/Cargo.toml --locked` for the backend.
 
 ## Project map
 
-- [`src/`](src) has the board, capture canvas, replay and terminal UI. [`recording.ts`](src/recording.ts) starts and stops board-and-mic capture and streams video chunks to Rust.
-- [`src-tauri/`](src-tauri) has the Rust desktop backend and permission/configuration files. [`recording.rs`](src-tauri/src/recording.rs) normalizes the video and runs offline transcription. [`terminal.rs`](src-tauri/src/terminal.rs) connects Claude Code and Codex to a local pseudoterminal.
-- [`scripts/`](scripts) installs the offline speech tools and model. Start with [`setup-windows.ps1`](scripts/setup-windows.ps1), [`setup-linux.sh`](scripts/setup-linux.sh), or [`setup-mac.sh`](scripts/setup-mac.sh).
-- [`docs/`](docs) records platform decisions and how to verify each port. Start with [`platforms.md`](docs/platforms.md).
-- [`.github/workflows/`](.github/workflows) packages native previews. Run [`desktop.yml`](.github/workflows/desktop.yml) manually when you need new downloads.
+- [`src/`](src) is the window you see. [`main.tsx`](src/main.tsx) runs the board and saving, [`Boards.tsx`](src/Boards.tsx) is the boards menu, [`boardTools.ts`](src/boardTools.ts) carries out Claude's look, draw and erase requests, and [`Terminal.tsx`](src/Terminal.tsx) is the terminal pane.
+- [`src-tauri/`](src-tauri) is the Rust backend. [`main.rs`](src-tauri/src/main.rs) saves boards and sets up `Documents/boardtutor`, [`board_tools.rs`](src-tauri/src/board_tools.rs) is the local server that gives Claude Code its board tools, and [`terminal.rs`](src-tauri/src/terminal.rs) runs the shell in the terminal pane.
+- [`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) builds the downloadable previews for macOS, Windows and Linux.
+- [`.agents/skills/`](.agents/skills) holds the agent skills used to build this project, such as [Ponytail](.agents/skills/ponytail/SKILL.md) for code changes.
 
-Run `npm test` for UI utility tests and `cargo test --manifest-path src-tauri/Cargo.toml --locked` for native backend tests.
-
-Excali Tutor is licensed under [MIT](LICENSE). Excalidraw and whisper.cpp are separate upstream projects.
+Board Tutor is licensed under [MIT](LICENSE). Excalidraw is a separate upstream project.

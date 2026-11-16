@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CaptureUpdateAction, Excalidraw, getSceneVersion } from "@excalidraw/excalidraw";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { Excalidraw, MainMenu, getSceneVersion } from "@excalidraw/excalidraw";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { readScene, serializeBoard, snapshot, type BoardAPI, type BoardData } from "./board";
-import { recordBoard, type ActiveRecording, type Replay } from "./recording";
+import { save } from "@tauri-apps/plugin-dialog";
+import { readScene, serializeBoard, type BoardAPI, type BoardData } from "./board";
+import { BoardList, BoardsContext } from "./Boards";
+import { drawOnBoard, eraseFromBoard, lookAtBoard, placeImage } from "./boardTools";
+import { listen } from "@tauri-apps/api/event";
+import { baseName, byName, isInside, joinPath, movedPath, parentOf, targetFolder, uniquePath, type Entry } from "./tree";
 import { TerminalPane } from "./Terminal";
-import { regionFor, timestamp, type AskContext, type Tutor, type Point, type Region } from "./study";
 import "@excalidraw/excalidraw/index.css";
 import "./styles.css";
 
@@ -19,45 +21,54 @@ window.EXCALIDRAW_ASSET_PATH = new URL("./", window.location.href).href;
 const encode = (text: string) => new TextEncoder().encode(text);
 const shortcut = /Mac/i.test(navigator.platform) ? "⌘⇧" : "Ctrl+Shift+";
 
+function TerminalIcon() {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3" /><path d="M13 15h4" />
+  </svg>;
+}
+
 function App() {
   const [initial, setInitial] = useState<{ data: BoardData | undefined } | null>(null);
   const [error, setError] = useState("");
-  const [saveLabel, setSaveLabel] = useState("");
-  const [tutor, setTutor] = useState<Tutor>("codex");
-  const [context, setContext] = useState<AskContext | null>(null);
-  const [marking, setMarking] = useState(false);
-  const [stroke, setStroke] = useState<Point[]>([]);
-  const [recording, setRecording] = useState<"idle" | "starting" | "recording" | "finishing" | "transcribing">("idle");
-  const [replay, setReplay] = useState<Replay | null>(null);
-  const [showReview, setShowReview] = useState(false);
-  const [preparing, setPreparing] = useState(false);
-  const board = useRef<HTMLDivElement>(null);
-  const player = useRef<HTMLVideoElement>(null);
+  const [boards, setBoards] = useState<string[]>([]);
+  const [folders, setFolders] = useState<string[]>([]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [boardKey, setBoardKey] = useState(0);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const api = useRef<BoardAPI | null>(null);
-  const pointer = useRef<Point | null>(null);
-  const mark = useRef<Point[]>([]);
-  const marked = useRef<Region | null>(null);
-  const active = useRef<ActiveRecording | null>(null);
-  const recordBusy = useRef(false);
-  const askBusy = useRef(false);
+  const opened = useRef(false);
+  const switching = useRef(false);
+  const currentRef = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saves = useRef<Promise<void>>(Promise.resolve());
   const savedSignature = useRef("");
   const savedImages = useRef(new Map<string, string>());
 
   useEffect(() => {
-    void invoke<string | null>("load_board").then((text) => {
-      const data = text ? readScene(text) : undefined;
-      setInitial({ data });
-    }).catch((cause: unknown) => setError(`Could not load the local board. ${String(cause)}`));
-    void invoke<Replay | null>("latest_recording").then(setReplay).catch((cause: unknown) => setError(String(cause)));
+    void (async () => {
+      const entries = await invoke<Entry[]>("list_boards");
+      const names = entries.filter((entry) => !entry.folder).map((entry) => entry.path).sort(byName);
+      setFolders(entries.filter((entry) => entry.folder).map((entry) => entry.path));
+      const remembered = localStorage.getItem("current-board");
+      const name = remembered && names.includes(remembered) ? remembered : names[0] ?? "board";
+      const text = await invoke<string | null>("open_board", { name });
+      currentRef.current = name;
+      setBoards(names.includes(name) ? names : [...names, name].sort(byName));
+      setCurrent(name);
+      setInitial({ data: text ? readScene(text) : undefined });
+    })().catch((cause: unknown) => setError(`Could not load the local board. ${String(cause)}`));
   }, []);
 
   function flushBoard() {
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
     const current = api.current;
-    if (!current) return saves.current;
+    const name = currentRef.current;
+    if (!current || !name) return saves.current;
     const files = current.getFiles();
     const fileIds = new Set(current.getSceneElements().flatMap((element) =>
       element.type === "image" && element.fileId && files[element.fileId] ? [element.fileId] : []));
@@ -69,7 +80,7 @@ function App() {
         await invoke<void>("save_board_image", encode(JSON.stringify(file)), { headers: { "x-image-id": encodeURIComponent(id) } });
         savedImages.current.set(id, file.dataURL);
       }
-      await invoke<void>("save_board", bytes);
+      await invoke<void>("save_board", bytes, { headers: { "x-board-name": encodeURIComponent(name) } });
     });
     saves.current = pending;
     return pending;
@@ -86,12 +97,10 @@ function App() {
     if (signature === savedSignature.current) return;
     savedSignature.current = signature;
     if (timer.current !== null) clearTimeout(timer.current);
-    setSaveLabel("Saving…");
     timer.current = setTimeout(() => {
-      void flushBoard().then(() => setSaveLabel("Saved locally")).catch((cause: unknown) => {
+      void flushBoard().catch((cause: unknown) => {
         savedSignature.current = "";
-        setSaveLabel("Save failed");
-        setError(String(cause));
+        setError(`Could not save the board. ${String(cause)}`);
       });
     }, 350);
   }
@@ -101,10 +110,6 @@ function App() {
     const subscribe = getCurrentWindow().onCloseRequested(async (event) => {
       if (allowClose) return;
       event.preventDefault();
-      if (recordBusy.current || active.current) {
-        setError("Stop the recording and let it finish before closing.");
-        return;
-      }
       try {
         await flushBoard();
         allowClose = true;
@@ -118,112 +123,117 @@ function App() {
     return () => { void subscribe.then((unlisten) => unlisten()).catch(() => {}); };
   }, []);
 
-  async function importBoard() {
-    if (!api.current) return;
-    const path = await open({ multiple: false, filters: [{ name: "Excalidraw board", extensions: ["excalidraw"] }] });
-    if (!path) return;
-    const scene = readScene(await invoke<string>("read_board_file", { path }));
-    api.current.addFiles(Object.values(scene.files));
-    api.current.updateScene({ elements: scene.elements, appState: scene.appState, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-    api.current.scrollToContent(scene.elements, { fitToViewport: true });
-    marked.current = null;
+  // Saves the board you are leaving, then opens the other one.
+  async function openBoard(name: string) {
+    if (name === currentRef.current || switching.current) return;
+    switching.current = true;
+    try {
+      await flushBoard();
+      const text = await invoke<string | null>("open_board", { name });
+      const data = text ? readScene(text) : undefined;
+      api.current = null;
+      savedSignature.current = "";
+      currentRef.current = name;
+      localStorage.setItem("current-board", name);
+      setBoards((list) => list.includes(name) ? list : [...list, name].sort(byName));
+      setCurrent(name);
+      setBoardKey((key) => key + 1);
+      setInitial({ data });
+    } finally {
+      switching.current = false;
+    }
+  }
+
+  // Leaves a board that is about to be deleted or moved, so it is not saved back.
+  async function leave(path: string) {
+    const here = currentRef.current;
+    if (!here || !isInside(here, path)) return;
+    const other = boards.find((item) => !isInside(item, path));
+    await openBoard(other ?? uniquePath(boards, "", "Board"));
+  }
+
+  async function deleteEntry(path: string, folder: boolean) {
+    await leave(path);
+    await invoke<void>("delete_entry", { path, folder });
+    setBoards((list) => list.filter((item) => !isInside(item, path)));
+    if (folder) setFolders((list) => list.filter((item) => !isInside(item, path)));
+    setSelected((sel) => sel && isInside(sel, path) ? null : sel);
+  }
+
+  async function renameEntry(path: string, newBase: string, folder: boolean) {
+    const to = joinPath(parentOf(path), newBase);
+    await moveEntry(path, to, folder);
+  }
+
+  async function moveEntry(path: string, to: string, folder: boolean) {
+    if (path === to) return;
+    const here = currentRef.current;
+    if (here && isInside(here, path)) await flushBoard();
+    await invoke<void>("rename_entry", { old: path, new: to, folder });
+    setBoards((list) => list.map((item) => movedPath(item, path, to)).sort(byName));
+    if (folder) setFolders((list) => list.map((item) => movedPath(item, path, to)).sort(byName));
+    setSelected((sel) => sel && movedPath(sel, path, to));
+    if (here && isInside(here, path)) {
+      const next = movedPath(here, path, to);
+      currentRef.current = next;
+      localStorage.setItem("current-board", next);
+      setCurrent(next);
+    }
+  }
+
+  async function newBoardIn(dir: string) {
+    setCollapsed((set) => { const next = new Set(set); next.delete(dir); return next; });
+    await openBoard(uniquePath(boards, dir, "Board"));
+  }
+
+  async function newFolderIn(dir: string) {
+    const path = uniquePath(folders, dir, "New folder");
+    await invoke<void>("create_folder", { path });
+    setFolders((list) => [...list, path].sort(byName));
+    setCollapsed((set) => { const next = new Set(set); next.delete(dir); return next; });
+    setRenaming(path);
   }
 
   async function exportBoard() {
     if (!api.current) return;
-    const chosen = await save({ defaultPath: "board.excalidraw", filters: [{ name: "Excalidraw board", extensions: ["excalidraw"] }] });
+    const chosen = await save({ defaultPath: `${baseName(currentRef.current ?? "board")}.excalidraw`, filters: [{ name: "Excalidraw board", extensions: ["excalidraw"] }] });
     if (!chosen) return;
     const path = chosen.endsWith(".excalidraw") ? chosen : `${chosen}.excalidraw`;
     await invoke("write_board_file", encode(serializeBoard(api.current)), { headers: { "x-board-path": encodeURIComponent(path) } });
   }
 
-  async function transcribe(item: Replay) {
-    setRecording("transcribing");
-    setReplay(await invoke<Replay>("transcribe", { id: item.id }));
-  }
-
-  async function toggleRecording() {
-    if (recordBusy.current || !board.current || !api.current) return;
-    recordBusy.current = true;
-    setError("");
+  // Saves the board first, so the terminal sees what is on screen.
+  async function openTerminal() {
+    if (!api.current || opened.current) return;
+    opened.current = true;
     try {
-      if (active.current) {
-        const session = active.current;
-        active.current = null;
-        setRecording("finishing");
-        const item = await session.stop();
-        setReplay(item);
-        setShowReview(true);
-        await transcribe(item);
-        setRecording("idle");
-      } else {
-        setRecording("starting");
-        setMarking(false);
-        setStroke([]);
-        // Dependency setup can be checked without losing the microphone gesture.
-        const dependencies = invoke<void>("check_tools").then(() => null, (cause: unknown) => cause);
-        const item = await recordBoard(board.current, () => api.current?.getAppState().viewBackgroundColor ?? "#fff", () => pointer.current);
-        active.current = item;
-        setRecording("recording");
-        const issue = await dependencies;
-        if (issue) setError(`Transcription setup is incomplete. The app will keep the recorded source if processing fails. ${String(issue)}`);
-      }
-    } catch (cause) {
-      setRecording("idle");
-      setError(String(cause));
+      await flushBoard();
+      setTerminalOpen(true);
     } finally {
-      recordBusy.current = false;
+      opened.current = false;
     }
   }
 
-  async function retryTranscript() {
-    if (!replay || recordBusy.current) return;
-    recordBusy.current = true;
-    setError("");
-    try { await transcribe(replay); }
-    catch (cause) { setError(String(cause)); }
-    finally { setRecording("idle"); recordBusy.current = false; }
-  }
-
-  async function ask(mode: "board" | "recording") {
-    if (!board.current || !api.current || askBusy.current || recordBusy.current || active.current) return;
-    if (mode === "recording" && (!replay || replay.lines === null)) {
-      setShowReview(true);
-      setError("Finish transcription before opening the video and transcript in Ask.");
-      return;
-    }
-    askBusy.current = true;
-    setPreparing(true);
-    setError("");
-    try {
-      const scene = serializeBoard(api.current);
-      const region = mode === "board" ? marked.current : null;
-      const images = snapshot(board.current, api.current.getAppState().viewBackgroundColor, region);
-      const attached = await invoke<{ id: string; path: string }>("prepare_ask", encode(JSON.stringify({
-        scene, ...images, recording: mode === "recording" ? replay?.id : undefined,
-      })));
-      setContext({ ...attached, scene, recorded: mode === "recording", focused: !!images.focus });
-      setMarking(false);
-      setStroke([]);
-      marked.current = null;
-    } finally {
-      askBusy.current = false;
-      setPreparing(false);
-    }
-  }
-
-  async function applyTutorEdit() {
-    if (!context || !api.current) return;
-    if (serializeBoard(api.current) !== context.scene) {
-      throw new Error("The board changed after Ask. Open a fresh Ask before applying a tutor edit.");
-    }
-    const raw = await invoke<string | null>("board_annotation", { id: context.id });
-    if (!raw) throw new Error("The tutor hasn't saved annotation.excalidraw yet.");
-    const scene = readScene(raw);
-    if (serializeBoard(api.current) !== context.scene) throw new Error("The board changed while loading the edit.");
-    api.current.addFiles(Object.values(scene.files));
-    api.current.updateScene({ elements: scene.elements, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-  }
+  // Claude's board tools arrive from the backend; the open board answers them.
+  useEffect(() => {
+    const subscription = listen<{ id: string; name: string; args: Record<string, unknown> | null }>("board-tool", ({ payload }) => {
+      void (async () => {
+        const board = api.current;
+        if (!board) throw new Error("No board is open yet.");
+        if (payload.name === "look_at_board") {
+          return lookAtBoard(board, currentRef.current ?? "", payload.args?.picture === true);
+        }
+        if (payload.name === "draw_on_board") return { text: await drawOnBoard(board, payload.args?.items as never), image: null };
+        if (payload.name === "place_image") return { text: await placeImage(board, payload.args as never), image: null };
+        if (payload.name === "erase_from_board") return { text: await eraseFromBoard(board, payload.args?.ids as never), image: null };
+        throw new Error(`Unknown tool ${payload.name}`);
+      })().then(
+        ({ text, image }) => invoke("board_tool_result", { id: payload.id, text, image }),
+        (cause: unknown) => invoke("board_tool_result", { id: payload.id, text: `Error: ${String(cause)}`, image: null }),
+      );
+    });
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, []);
 
   function run(action: () => Promise<unknown>) {
     setError("");
@@ -232,117 +242,51 @@ function App() {
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.code === "Escape" && marking) {
-        setMarking(false);
-        setStroke([]);
-        marked.current = null;
-        return;
-      }
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.repeat) return;
-      const action = event.code === "KeyR" ? toggleRecording
-        : event.code === "KeyA" ? () => ask(replay && !marked.current ? "recording" : "board")
-        : null;
-      if (action) {
-        event.preventDefault();
-        event.stopPropagation();
-        run(action);
-      }
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.repeat || event.code !== "KeyT") return;
+      event.preventDefault();
+      event.stopPropagation();
+      run(openTerminal);
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   });
 
-  function position(event: PointerEvent<Element>) {
-    const rect = board.current!.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
-  }
-
-  function startMark(event: PointerEvent<SVGSVGElement>) {
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    marked.current = null;
-    mark.current = [position(event)];
-    setStroke(mark.current);
-  }
-
-  function moveMark(event: PointerEvent<SVGSVGElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    mark.current = [...mark.current, position(event)];
-    setStroke(mark.current);
-  }
-
-  function finishMark(event: PointerEvent<SVGSVGElement>) {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId) || !board.current) return;
-    marked.current = regionFor([...mark.current, position(event)], board.current.getBoundingClientRect());
-    if (marked.current) setMarking(false);
-    else setStroke([]);
-  }
-
-  const busy = recording !== "idle" && recording !== "recording";
   return <main className="app">
-    <header className="topbar">
-      <div className="brand"><span className="brand-icon" aria-hidden="true">∿</span>Excali Tutor</div>
-      <div className="file-actions">
-        <button onClick={() => run(importBoard)} disabled={!initial}>Open</button>
-        <button onClick={() => run(exportBoard)} disabled={!initial}>Export</button>
-        <span className="save-label">{saveLabel}</span>
-      </div>
-      <div className="study-actions">
-        <button className={recording === "recording" ? "record active" : "record"}
-          onClick={() => run(toggleRecording)} disabled={busy || !initial}
-          title={`Record board and microphone (${shortcut}R)`}>
-          <span aria-hidden="true">●</span> {recording === "recording" ? "Stop" : busy ? "Processing…" : "Record"}
-        </button>
-        <button onClick={() => setShowReview(!showReview)} disabled={!replay} aria-pressed={showReview}>Replay</button>
-        <button onClick={() => {
-          marked.current = null; mark.current = []; setStroke([]); setMarking(!marking);
-        }} aria-pressed={marking} disabled={!initial || recording !== "idle"}>Circle</button>
-        <select aria-label="Tutor CLI" value={tutor} onChange={(event) => setTutor(event.target.value as Tutor)}>
-          <option value="codex">Codex</option><option value="claude">Claude Code</option>
-        </select>
-        <button className="primary" disabled={!initial || preparing || recording !== "idle"}
-          title={`Open tutor with the circled area or latest recording (${shortcut}A)`}
-          onClick={() => run(() => ask(replay && !marked.current ? "recording" : "board"))}>
-          {preparing ? "Loading…" : "Ask"}
-        </button>
-      </div>
-    </header>
     {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError("")}>Dismiss</button></div>}
     <div className="workspace">
-      <section className="board" ref={board}
-        onPointerMove={(event) => { pointer.current = position(event); }}
-        onPointerLeave={() => { pointer.current = null; }}>
-        {initial ? <Excalidraw excalidrawAPI={(value) => { api.current = value; }} initialData={initial.data}
-          onChange={changed} UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false, export: false } }} />
+      <section className="board">
+        {initial && current ? <BoardsContext.Provider value={{
+          boards, folders, current, selected, collapsed, renaming,
+          open: (path) => run(() => openBoard(path)),
+          select: setSelected,
+          toggle: (folder) => setCollapsed((set) => { const next = new Set(set); if (!next.delete(folder)) next.add(folder); return next; }),
+          rename: (path, newBase, folder) => run(() => renameEntry(path, newBase, folder)),
+          move: (path, dir) => run(async () => {
+            if (!boards.includes(path) || !folders.includes(dir) || parentOf(path) === dir) return;
+            await moveEntry(path, joinPath(dir, baseName(path)), false);
+            setCollapsed((set) => { const next = new Set(set); next.delete(dir); return next; });
+          }),
+          remove: (path, folder) => run(() => deleteEntry(path, folder)),
+          newBoard: (dir) => run(() => newBoardIn(dir ?? targetFolder(selected, folders))),
+          newFolder: (dir) => run(() => newFolderIn(dir ?? targetFolder(selected, folders))),
+          doneRenaming: () => setRenaming(null),
+        }}><Excalidraw key={boardKey} excalidrawAPI={(value) => { api.current = value; }} initialData={initial.data}
+          onChange={changed}
+          UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false, export: false } }}
+          renderTopRightUI={() => <button type="button" aria-label="Open terminal"
+            title={`Open terminal (${shortcut}T)`} onClick={() => run(openTerminal)}><TerminalIcon /></button>}>
+            <MainMenu>
+              <MainMenu.ItemCustom><BoardList /></MainMenu.ItemCustom>
+              <MainMenu.Separator />
+              <MainMenu.Item onSelect={() => run(exportBoard)}>Export board…</MainMenu.Item>
+              <MainMenu.Separator />
+              <MainMenu.DefaultItems.ToggleTheme />
+              <MainMenu.DefaultItems.ChangeCanvasBackground />
+            </MainMenu>
+          </Excalidraw></BoardsContext.Provider>
           : <p className="board-loading">Opening local whiteboard…</p>}
-        {(marking || stroke.length > 0) && <svg className={marking ? "mark-layer drawing" : "mark-layer"}
-          onPointerDown={startMark} onPointerMove={moveMark} onPointerUp={finishMark}
-          onPointerCancel={() => { mark.current = []; setStroke([]); }}>
-          <polyline points={stroke.map(({ x, y }) => `${x},${y}`).join(" ")}
-            fill="none" stroke="#7555e5" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>}
-        {marking && <div className="board-hint">Circle the part you’re stuck on.</div>}
-        {!marking && stroke.length > 0 && <div className="board-hint">Circled area ready for Ask.</div>}
       </section>
-      {context && <TerminalPane key={`${context.id}-${tutor}`} context={context} tutor={tutor}
-        onApply={() => run(applyTutorEdit)} onClose={() => setContext(null)} />}
-      {showReview && replay && <aside className="review-pane" aria-label="Replay">
-        <div className="pane-title"><strong>Replay</strong><button aria-label="Close replay" onClick={() => setShowReview(false)}>×</button></div>
-        <video key={replay.id} ref={player} controls preload="metadata" src={convertFileSrc(replay.videoPath)} />
-        <div className="review-actions">
-          <button onClick={() => run(() => ask("recording"))} disabled={replay.lines === null || preparing || recording !== "idle"}>Ask about recording</button>
-          <button onClick={() => run(() => ask("board"))} disabled={preparing || recording !== "idle"}>Ask about board</button>
-          {replay.lines === null && <button onClick={() => run(retryTranscript)} disabled={recording !== "idle"}>Transcribe locally</button>}
-        </div>
-        <div className="transcript">
-          {replay.lines?.map((line, index) => <button className="transcript-line" key={`${line.startMs}-${index}`}
-            onClick={() => { if (player.current) player.current.currentTime = line.startMs / 1000; }}>
-            <time>{timestamp(line.startMs)}</time><span>{line.text}</span>
-          </button>)}
-          {recording === "transcribing" && <p>Transcribing on this computer…</p>}
-          {replay.lines?.length === 0 && <p>No speech detected.</p>}
-        </div>
-      </aside>}
+      {terminalOpen && <TerminalPane onClose={() => setTerminalOpen(false)} />}
     </div>
   </main>;
 }
