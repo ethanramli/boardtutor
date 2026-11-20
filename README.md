@@ -2,6 +2,28 @@
 
 A plain Excalidraw whiteboard with Claude Code beside it. Work through a problem on the board, open the terminal, and ask Claude about it. Claude can look at your board and draw on it while you watch: a red **Claude** cursor writes text, sketches with the pencil, and adds arrows and shapes, right next to your own work.
 
+## Download Board Tutor
+
+1. Open [Desktop downloads](https://github.com/ethanramli/boardtutor/actions/workflows/desktop.yml) and select the latest successful run.
+2. Under **Artifacts**, download the build for your computer. GitHub requires you to sign in to download Actions artifacts.
+
+| Your computer | Artifact | Open after extracting |
+| --- | --- | --- |
+| Windows x64 | `Board-Tutor-Windows-x64` | The `-setup.exe` installer |
+| Mac with Apple silicon | `Board-Tutor-macOS-apple-silicon` | `Board Tutor.app` inside the inner ZIP |
+| Mac with Intel | `Board-Tutor-macOS-intel` | `Board Tutor.app` inside the inner ZIP |
+| Debian or Ubuntu x64 | `Board-Tutor-Linux-x64-deb` | The `.deb` package |
+
+The desktop builds are previews. Windows and Linux builds have yet to be tested by hand.
+
+3. **On macOS**, move **Board Tutor.app** to Applications. If macOS blocks the unsigned preview, run this in Terminal after confirming you downloaded it from this repository:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Board Tutor.app"
+   ```
+
+4. **For AI tutoring**, [install Claude Code](https://code.claude.com/docs/en/setup), sign in, and check that `claude --version` works in your terminal.
+
 ## What it costs
 
 Claude draws through three small tools (`look_at_board`, `draw_on_board`, `erase_from_board`) instead of reading and rewriting board files or taking screenshots. Only short commands like `text 120,80 "F = ma"` travel; the app draws them.
@@ -12,17 +34,6 @@ Claude draws through three small tools (`look_at_board`, `draw_on_board`, `erase
 | A rocket, before the board tools existed | not recorded | Nothing drawn; Claude spent the request searching for the board file | $0.30 |
 
 Both numbers are from Claude Code's usage screen on 2026-11-15. They are single runs, and the second used a different setup and possibly a different model, so read them as one example rather than a benchmark. Choosing a cheaper model with `/model` lowers the cost further.
-
-## Install
-
-1. **Download.** Open the latest run of [Desktop previews](.github/workflows/desktop.yml) under the repository's Actions tab, scroll to **Artifacts**, and download the file for your system. A maintainer starts that build with **Run workflow**.
-2. **macOS only: let the app open.** The preview is not signed with an Apple Developer ID, so macOS may say it is damaged or from an unidentified developer. Move **Board Tutor.app** to Applications, then run this once in Terminal:
-   ```sh
-   xattr -dr com.apple.quarantine "/Applications/Board Tutor.app"
-   ```
-3. **Install Claude Code** and sign in, following [its setup guide](https://code.claude.com/docs/en/setup). Check that `claude --version` works in a normal terminal.
-
-Windows and Linux builds are produced by the same workflow but have not been tested by hand yet.
 
 ## First run
 
