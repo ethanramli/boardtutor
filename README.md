@@ -4,25 +4,22 @@ A plain Excalidraw whiteboard with Claude Code beside it. Work through a problem
 
 ## Download Board Tutor
 
-1. Open [Desktop downloads](https://github.com/ethanramli/boardtutor/actions/workflows/desktop.yml) and select the latest successful run.
-2. Under **Artifacts**, download the build for your computer. GitHub requires you to sign in to download Actions artifacts.
-
-| Your computer | Artifact | Open after extracting |
+| Your computer | Download | Install |
 | --- | --- | --- |
-| Windows x64 | `Board-Tutor-Windows-x64` | The `-setup.exe` installer |
-| Mac with Apple silicon | `Board-Tutor-macOS-apple-silicon` | `Board Tutor.app` inside the inner ZIP |
-| Mac with Intel | `Board-Tutor-macOS-intel` | `Board Tutor.app` inside the inner ZIP |
-| Debian or Ubuntu x64 | `Board-Tutor-Linux-x64-deb` | The `.deb` package |
+| Windows x64 | [Download Windows installer](https://github.com/ethanramli/boardtutor/releases/latest/download/Board-Tutor-Windows-x64-setup.exe) | Run the setup file. It downloads WebView2 if needed. |
+| Mac with Apple silicon | [Download for Apple silicon](https://github.com/ethanramli/boardtutor/releases/latest/download/Board-Tutor-macOS-apple-silicon.zip) | Unzip and move **Board Tutor.app** to Applications. |
+| Mac with Intel | [Download for Intel](https://github.com/ethanramli/boardtutor/releases/latest/download/Board-Tutor-macOS-intel.zip) | Unzip and move **Board Tutor.app** to Applications. |
+| Debian or Ubuntu x64 | [Download the Debian package](https://github.com/ethanramli/boardtutor/releases/latest/download/Board-Tutor-Linux-x64.deb) | Run `sudo apt install ./Board-Tutor-Linux-x64.deb` from your Downloads folder to install the app and its dependencies. |
 
-The desktop builds are previews. Windows and Linux builds have yet to be tested by hand.
+The downloads contain the compiled app. Rust and Node.js are only needed to build from source.
 
-3. **On macOS**, move **Board Tutor.app** to Applications. If macOS blocks the unsigned preview, run this in Terminal after confirming you downloaded it from this repository:
+If macOS blocks the preview after you move it to Applications, run this in Terminal after confirming you downloaded it from this repository:
 
-   ```sh
-   xattr -dr com.apple.quarantine "/Applications/Board Tutor.app"
-   ```
+```sh
+xattr -dr com.apple.quarantine "/Applications/Board Tutor.app"
+```
 
-4. **For AI tutoring**, [install Claude Code](https://code.claude.com/docs/en/setup), sign in, and check that `claude --version` works in your terminal.
+For AI tutoring, [install Claude Code](https://code.claude.com/docs/en/setup), sign in, and check that `claude --version` works in your terminal.
 
 ## What it costs
 

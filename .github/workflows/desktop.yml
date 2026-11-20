@@ -2,6 +2,9 @@ name: Desktop previews
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -59,7 +62,7 @@ jobs:
         run: |
           mkdir -p preview
           ditto "src-tauri/target/release/bundle/macos/Board Tutor.app" "preview/Board Tutor.app"
-          ditto -c -k --keepParent preview "Board-Tutor-${{ matrix.artifact }}.zip"
+          ditto -c -k --keepParent "preview/Board Tutor.app" "Board-Tutor-${{ matrix.artifact }}.zip"
           mkdir -p downloads
           mv "Board-Tutor-${{ matrix.artifact }}.zip" downloads/
       - name: Prepare Windows installer
@@ -68,15 +71,39 @@ jobs:
         run: |
           New-Item -ItemType Directory downloads | Out-Null
           $installer = Get-Item src-tauri/target/release/bundle/nsis/*-setup.exe
-          Copy-Item $installer.FullName downloads/
+          Copy-Item $installer.FullName downloads/Board-Tutor-Windows-x64-setup.exe
       - name: Prepare Debian package
         if: runner.os == 'Linux'
         run: |
           mkdir downloads
           dpkg-deb -I src-tauri/target/release/bundle/deb/*.deb
-          cp src-tauri/target/release/bundle/deb/*.deb downloads/
+          cp src-tauri/target/release/bundle/deb/*.deb downloads/Board-Tutor-Linux-x64.deb
       - uses: actions/upload-artifact@v4
         with:
           name: Board-Tutor-${{ matrix.artifact }}
           path: downloads/
           if-no-files-found: error
+
+  release:
+    name: Publish desktop installers
+    if: github.ref_type == 'tag'
+    needs: preview
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Board-Tutor-*
+          path: downloads
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            downloads/Board-Tutor-Windows-x64-setup.exe \
+            downloads/Board-Tutor-macOS-apple-silicon.zip \
+            downloads/Board-Tutor-macOS-intel.zip \
+            downloads/Board-Tutor-Linux-x64.deb
