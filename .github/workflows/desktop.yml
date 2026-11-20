@@ -72,6 +72,20 @@ jobs:
           New-Item -ItemType Directory downloads | Out-Null
           $installer = Get-Item src-tauri/target/release/bundle/nsis/*-setup.exe
           Copy-Item $installer.FullName downloads/Board-Tutor-Windows-x64-setup.exe
+      - name: Check Windows installer creates the workspace before first launch
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $workspace = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'boardtutor'
+          if (Test-Path -LiteralPath $workspace) { throw 'Workspace already exists before install' }
+          $setup = Get-Item downloads/Board-Tutor-Windows-x64-setup.exe
+          $install = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Installer exited with $($install.ExitCode)" }
+          foreach ($folder in 'memory', 'skills', 'whiteboards') {
+            if (!(Test-Path -LiteralPath (Join-Path $workspace $folder) -PathType Container)) {
+              throw "Installer did not create $folder"
+            }
+          }
       - name: Prepare Debian package
         if: runner.os == 'Linux'
         run: |

@@ -34,7 +34,9 @@ Both numbers are from Claude Code's usage screen on 2026-11-15. They are single 
 
 ## First run
 
-Everything else is set up by the app when it starts:
+On Windows, the installer creates the workspace folders. Board Tutor also makes sure they exist on every launch across all platforms.
+
+The app completes the workspace setup when it starts:
 
 - It creates `Documents/boardtutor` with `whiteboards/` (your boards and folders), `memory/` (notes about how you like to learn) and `skills/` (teaching skills).
 - It writes the connection for Claude's board tools (`.mcp.json`) and a settings file that pre-approves them (`.claude/settings.json`).
